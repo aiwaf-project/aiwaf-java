@@ -1,0 +1,32 @@
+# Maven / Java build output
+/target/
+**/target/
+
+# Compiled Java classes
+*.class
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local Maven cache override artifacts (if used locally)
+.mvn/
+
+# Sandbox generated outputs
+examples/sandbox/results_*.json
+
+# Runtime/local binary artifacts
+*.bin
+
+# Temporary files
+*.tmp
+*.swp
+*~
