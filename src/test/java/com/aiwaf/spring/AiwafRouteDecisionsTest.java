@@ -1,6 +1,7 @@
 package com.aiwaf.spring;
 
 import com.aiwaf.core.AiwafConfig;
+import com.aiwaf.core.AiwafEngine;
 import com.aiwaf.spring.annotations.AiwafExempt;
 import com.aiwaf.spring.annotations.AiwafExemptFrom;
 import com.aiwaf.spring.annotations.AiwafOnly;
@@ -105,5 +106,15 @@ class AiwafRouteDecisionsTest {
 
         assertTrue(AiwafRouteDecisions.shouldApply("/x", onlyAlias, "header_validation", List.of()));
         assertFalse(AiwafRouteDecisions.shouldApply("/x", onlyAlias, "rate_limit", List.of()));
+    }
+
+    @Test
+    void spring_filter_enriches_legitimate_keywords_from_routes() {
+        AiwafConfig config = new AiwafConfig();
+        AiwafEngine engine = new AiwafEngine(config);
+        AiwafFilter filter = new AiwafFilter(engine, new DemoController());
+        assertTrue(engine.config().legitimatePathKeywords.contains("exemptall"));
+        assertTrue(engine.config().legitimatePathKeywords.contains("onlyheader"));
+        assertTrue(filter != null);
     }
 }

@@ -155,6 +155,27 @@ public final class AiwafConfig {
     public Map<String, List<String>> requiredHeadersByMethod = new HashMap<>();
     public Set<String> blockedPathPatterns = new HashSet<>(Arrays.asList(".env", "../", "%2e%2e", "wp-admin", "phpmyadmin", ".git"));
     public List<PathRule> pathRules = new ArrayList<>();
+    public boolean aiEnabled = false;
+    public boolean aiLazyLoadModel = true;
+    public boolean aiBackgroundPreload = false;
+    public String aiModelPath = "aiwaf-model.bin";
+    public double aiAnomalyScoreThreshold = 0.7;
+    public boolean aiRequireBehaviorConfirmation = true;
+    public int aiRecentWindowSeconds = 300;
+    public int aiMinRecentSamplesToBlock = 5;
+    public boolean aiTimingLogsEnabled = false;
+    public boolean enableKeywordLearning = true;
+    public int dynamicTopN = 10;
+    public Set<String> exemptKeywords = new HashSet<>();
+    public Set<String> legitimatePathKeywords = new HashSet<>();
+    public boolean storeExtendedBlockInfo = true;
+    public int blockInfoMaxHeaders = 50;
+    public int blockInfoMaxHeaderValueLength = 512;
+    public Set<String> blockInfoRedactHeaders = new HashSet<>(Set.of("authorization", "cookie", "set-cookie"));
+    public boolean observabilityEnabled = true;
+    public String storageBackend = "memory";
+    public String storageFilePath = null;
+    public Set<String> legitimateRouteHints = new HashSet<>();
 
     public boolean isAutoExemptPath(String path) {
         if (path == null || path.isBlank()) {

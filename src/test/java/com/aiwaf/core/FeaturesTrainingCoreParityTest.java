@@ -38,9 +38,10 @@ class FeaturesTrainingCoreParityTest {
     @Test
     void training_returns_model_payload() {
         TrainedModelCore model = TrainingCore.trainModel(events(), List.of());
-        assertEquals("baseline-statistical", model.modelType());
+        assertEquals("isolation-forest", model.modelType());
         assertEquals(3, ((Number) model.payload().get("samples")).intValue());
         assertTrue(model.payload().containsKey("behavior"));
+        assertTrue(model.payload().containsKey("isolation_forest"));
     }
 
     @Test

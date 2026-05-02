@@ -3,15 +3,15 @@ WORKDIR /workspace
 
 COPY pom.xml /workspace/pom.xml
 COPY src /workspace/src
-RUN mvn -q -DskipTests install
+RUN mvn -q -DskipTests -Dgpg.skip=true install
 
 COPY examples/sandbox/aiwaf-java /workspace/examples/sandbox/aiwaf-java
 WORKDIR /workspace/examples/sandbox/aiwaf-java
-RUN mvn -q -DskipTests package
+RUN mvn -q -DskipTests -Dgpg.skip=true package
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY --from=build /workspace/examples/sandbox/aiwaf-java/target/aiwaf-java-example-0.1.0.jar /app/app.jar
+COPY --from=build /workspace/examples/sandbox/aiwaf-java/target/aiwaf-java-example-0.2.0.jar /app/app.jar
 
 ENV PORT=8080
 ENV TARGET_BASE_URL=http://juice:3000

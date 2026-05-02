@@ -2,6 +2,23 @@
 
 AIWAF Java is a Java-native web application firewall implementation for Servlet and Spring applications, with parity-oriented core logic and runnable sandbox examples.
 
+## Maven Artifact
+
+Published coordinates:
+
+- Version: `0.2.0`
+- Maven package URL: `pkg:maven/io.github.aiwaf-project/aiwaf-java@0.2.0`
+
+Add to your project:
+
+```xml
+<dependency>
+    <groupId>io.github.aiwaf-project</groupId>
+    <artifactId>aiwaf-java</artifactId>
+    <version>0.2.0</version>
+</dependency>
+```
+
 ## Table of Contents
 
 - [What This Project Is](#what-this-project-is)
@@ -44,6 +61,10 @@ Primary objective: consistent and testable Java behavior for AIWAF controls, inc
   - `aiwaf-spring` (Spring Boot reverse proxy)
 - Route annotation behavior (`@AiwafExempt`, `@AiwafExemptFrom`, `@AiwafOnly`, `@AiwafRequireProtection`) is implemented and tested.
 - Middleware alias normalization supports underscore and hyphen forms (e.g. `rate_limit`, `rate-limit`).
+- sklearn-like Isolation Forest implementation is included in core (`IsolationForestCore`) and integrated into training/runtime AI anomaly checks.
+- Model artifact persistence, validation, and schema migration are implemented (`ModelArtifactIoCore`, `ModelArtifactMigrationCore`, `LazyModelProviderCore`).
+- Runtime observability is available via built-in telemetry counters/histograms (`AiwafTelemetryCore`).
+- Python-style structured config compatibility and env/property override mapping are available (`AiwafConfigCompatCore`).
 
 ## Architecture
 
@@ -99,6 +120,7 @@ Implemented controls include:
 - IP/keyword block
   - static suspicious path patterns
   - learned keyword store integration
+  - contextual keyword learning guardrails and legitimacy filters
 - Honeypot timing
   - GET-to-POST timing checks
   - login-path timing override support
@@ -111,6 +133,12 @@ Implemented controls include:
   - exempt IPs, private IP behavior
   - exempt path patterns and prefixes
   - path-rule middleware overrides
+- AI anomaly detection
+  - Isolation Forest scoring from request feature vectors
+  - runtime recent-behavior confirmation before blocking
+  - configurable anomaly thresholds, windows, and minimum sample gates
+- Extended block context
+  - optional capture of method/path/query/header snapshot on block events (with redaction/truncation limits)
 
 ## Configuration Model
 
@@ -137,10 +165,26 @@ Categories:
   - `loginPathPrefixes`, `loginMinFormTimeSeconds`
 - Other controls:
   - `uuidTamperEnabled`, `ipKeywordBlockEnabled`, `methodValidationEnabled`, `allowedMethods`
+- AI/anomaly:
+  - `aiEnabled`, `aiLazyLoadModel`, `aiBackgroundPreload`, `aiModelPath`
+  - `aiAnomalyScoreThreshold`, `aiRequireBehaviorConfirmation`
+  - `aiRecentWindowSeconds`, `aiMinRecentSamplesToBlock`
+- Keyword learning / legitimacy:
+  - `enableKeywordLearning`, `dynamicTopN`
+  - `exemptKeywords`, `legitimatePathKeywords`, `legitimateRouteHints`
+- Block context / observability:
+  - `storeExtendedBlockInfo`, `blockInfoMaxHeaders`, `blockInfoMaxHeaderValueLength`, `blockInfoRedactHeaders`
+  - `observabilityEnabled`
+- Storage:
+  - `storageBackend`, `storageFilePath`
 - Middleware switches:
   - `enabledMiddlewares`, `disabledMiddlewares`
 - Path rules:
   - `pathRules` (`AiwafConfig.PathRule`) supports per-prefix disable and overrides.
+
+Python-style compatibility input is supported through `AiwafConfigCompatCore`, including sections such as:
+- `storage`, `header_validation`, `rate_limiting`, `honeypot`, `ip_keyword_block`
+- `geo_block`, `ai_anomaly`, `uuid_tamper`, `exemptions`, `path_rules`
 
 ## Spring Integration
 
@@ -188,6 +232,10 @@ Stores include:
 - Keyword store
 - Geo block store
 
+Model artifacts (trained IF payload + metadata) can be loaded/saved with:
+- `ModelArtifactIoCore`
+- `ModelArtifactMigrationCore` (schema compatibility/migration guardrails)
+
 ## GeoIP Behavior
 
 GeoIP logic is CLI-oriented with MMDB data under:
@@ -208,6 +256,22 @@ Design notes:
 - `RouteShellHelpers`
 
 These are covered by logic tests in `src/test/java/com/aiwaf/cli`.
+
+## AI Model Lifecycle
+
+- Trainer emits IF-backed model payloads with metadata/version markers.
+- Runtime supports eager or lazy model loading (`LazyModelProviderCore`).
+- Artifact compatibility is validated on load; incompatible schema is rejected unless a migration path is available.
+- Migration logic currently covers supported legacy IF payload shapes and normalizes to current schema.
+
+## Runtime Telemetry
+
+When `observabilityEnabled=true`, telemetry tracks:
+- request totals and allow/block outcomes
+- middleware trigger counters
+- evaluation latency histogram
+
+Use `AiwafEngine.telemetry()` for in-process metrics snapshots.
 
 ## Project Layout
 
@@ -318,4 +382,3 @@ Typical cycle:
 3. Run full `mvn test`
 4. Rebuild sandbox and run attack/compare workflow
 5. Clean results before committing if desired
-

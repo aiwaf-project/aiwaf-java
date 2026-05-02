@@ -1,6 +1,7 @@
 package com.aiwaf.core;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,13 +28,48 @@ public final class TrainingCore {
             statusCounts.put(event.statusCode(), statusCounts.getOrDefault(event.statusCode(), 0) + 1);
         }
 
+        List<String> featureNames = vectors.get(0).values().keySet().stream().sorted(Comparator.naturalOrder()).toList();
+        double[][] matrix = new double[vectors.size()][featureNames.size()];
+        for (int i = 0; i < vectors.size(); i++) {
+            Map<String, Double> values = vectors.get(i).values();
+            for (int j = 0; j < featureNames.size(); j++) {
+                matrix[i][j] = values.getOrDefault(featureNames.get(j), 0.0);
+            }
+        }
+
+        int trees = 100;
+        int sampleSize = Math.min(256, matrix.length);
+        double contamination = 0.05;
+        IsolationForestCore.Model model = IsolationForestCore.fit(matrix, trees, Math.max(2, sampleSize), 42L);
+        double[] scores = IsolationForestCore.scoreAll(model, matrix);
+        double threshold = IsolationForestCore.thresholdFromContamination(scores, contamination);
+        int anomalyCount = IsolationForestCore.countAnomalies(scores, threshold);
+
         Map<String, Object> behavior = analyzeBehavior(events, staticKeywords, null, false);
+        Map<String, Object> isolationForest = new HashMap<>();
+        isolationForest.put("backend", "java");
+        isolationForest.put("trees", trees);
+        isolationForest.put("sample_size", model.sampleSize());
+        isolationForest.put("contamination", contamination);
+        isolationForest.put("threshold", threshold);
+        isolationForest.put("anomaly_count", anomalyCount);
+        isolationForest.put("feature_names", featureNames);
+        isolationForest.put("model", model);
+
         Map<String, Object> payload = new HashMap<>();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("model_backend", "aiwaf_java");
+        metadata.put("created_at_epoch_ms", System.currentTimeMillis());
+        metadata.put("aiwaf_java_version", "0.1.0");
+        metadata.put("java_runtime_version", System.getProperty("java.runtime.version", "unknown"));
+        metadata.put("model_schema", "iforest-v1");
         payload.put("avg_response_time_ms", avgResponse);
         payload.put("status_counts", statusCounts);
         payload.put("samples", events.size());
         payload.put("behavior", behavior);
-        return new TrainedModelCore("baseline-statistical", "1", payload);
+        payload.put("isolation_forest", isolationForest);
+        payload.put("metadata", metadata);
+        return new TrainedModelCore("isolation-forest", "1", payload);
     }
 
     public static Map<String, Object> analyzeBehavior(

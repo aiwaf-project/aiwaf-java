@@ -2,6 +2,7 @@ package com.aiwaf.spring;
 
 import com.aiwaf.core.AiwafDecision;
 import com.aiwaf.core.AiwafEngine;
+import com.aiwaf.core.LegitimateRouteKeywordsCore;
 import com.aiwaf.core.ServletRequestMapper;
 import com.aiwaf.spring.support.AiwafRouteDecisions;
 import jakarta.servlet.FilterChain;
@@ -44,6 +45,7 @@ public final class AiwafFilter extends OncePerRequestFilter {
     public AiwafFilter(AiwafEngine engine, Object... handlers) {
         this.engine = engine;
         this.routePolicies = buildPolicies(handlers);
+        enrichLegitimateKeywords(engine, handlers);
     }
 
     @Override
@@ -207,6 +209,64 @@ public final class AiwafFilter extends OncePerRequestFilter {
         }
         regex.append("$");
         return Pattern.compile(regex.toString());
+    }
+
+    private static void enrichLegitimateKeywords(AiwafEngine engine, Object... handlers) {
+        if (engine == null || engine.config() == null || handlers == null || handlers.length == 0) {
+            return;
+        }
+        Set<String> out = engine.config().legitimatePathKeywords;
+        Set<Class<?>> types = new HashSet<>();
+        for (Object handler : handlers) {
+            if (handler == null) continue;
+            Class<?> type = handler.getClass();
+             types.add(type);
+            addTokenized(out, type.getSimpleName());
+
+            RequestMapping classMapping = AnnotatedElementUtils.findMergedAnnotation(type, RequestMapping.class);
+            for (String classPath : extractPaths(classMapping)) {
+                addPathTokens(out, classPath);
+            }
+
+            for (Method method : type.getMethods()) {
+                addTokenized(out, method.getName());
+                Mapping mapping = extractMethodMapping(method);
+                if (mapping == null) continue;
+                for (String methodPath : mapping.paths()) {
+                    addPathTokens(out, methodPath);
+                }
+            }
+        }
+        LegitimateRouteKeywordsCore.mergeInto(out, LegitimateRouteKeywordsCore.fromHandlerClasses(types));
+    }
+
+    private static void addPathTokens(Set<String> out, String rawPath) {
+        if (rawPath == null || rawPath.isBlank()) return;
+        String normalized = rawPath.toLowerCase(Locale.ROOT);
+        StringBuilder literal = new StringBuilder();
+        boolean inVar = false;
+        for (int i = 0; i < normalized.length(); i++) {
+            char c = normalized.charAt(i);
+            if (c == '{') {
+                inVar = true;
+            } else if (c == '}') {
+                inVar = false;
+            } else if (!inVar) {
+                literal.append(c);
+            }
+        }
+        addTokenized(out, literal.toString());
+    }
+
+    private static void addTokenized(Set<String> out, String text) {
+        if (text == null || text.isBlank()) return;
+        String[] parts = text.toLowerCase(Locale.ROOT).split("[^a-z0-9]+");
+        for (String part : parts) {
+            if (part.length() >= 3) {
+                out.add(part);
+                if (!part.endsWith("s")) out.add(part + "s");
+            }
+        }
     }
 
     private record Mapping(String[] paths, RequestMethod[] methods) {}

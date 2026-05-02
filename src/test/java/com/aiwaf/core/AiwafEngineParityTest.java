@@ -1,8 +1,10 @@
 package com.aiwaf.core;
 
 import com.aiwaf.runtime.RuntimeStorage;
+import com.aiwaf.runtime.BlacklistManager;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,6 +12,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class AiwafEngineParityTest {
 
@@ -230,6 +233,88 @@ class AiwafEngineParityTest {
         assertEquals(403, normalPostFast.statusCode());
         assertTrue(loginGet.allowed());
         assertTrue(loginPostFast.allowed());
+    }
+
+    @Test
+    void ai_model_lazy_load_can_block_anomalous_request() throws Exception {
+        List<NormalizedEvent> training = List.of(
+                new NormalizedEvent("1.1.1.1", "GET", "/home", 200, 3, java.time.LocalDateTime.now(), "", "", "", true, false),
+                new NormalizedEvent("1.1.1.1", "GET", "/about", 200, 3, java.time.LocalDateTime.now(), "", "", "", true, false),
+                new NormalizedEvent("1.1.1.2", "GET", "/contact", 200, 3, java.time.LocalDateTime.now(), "", "", "", true, false),
+                new NormalizedEvent("1.1.1.3", "GET", "/pricing", 200, 3, java.time.LocalDateTime.now(), "", "", "", true, false)
+        );
+        TrainedModelCore model = TrainingCore.trainModel(training, List.of(".php", ".env", "wp-admin"));
+        String path = Files.createTempFile("aiwaf-model-", ".bin").toString();
+        assertTrue(ModelArtifactIoCore.save(model, path));
+
+        AiwafConfig config = new AiwafConfig();
+        config.privateIpsExempted = false;
+        config.headerValidationEnabled = false;
+        config.rateLimitEnabled = false;
+        config.ipKeywordBlockEnabled = false;
+        config.aiEnabled = true;
+        config.aiModelPath = path;
+        config.aiRequireBehaviorConfirmation = false;
+        config.aiAnomalyScoreThreshold = 0.01;
+        AiwafEngine engine = new AiwafEngine(config);
+
+        AiwafDecision d = engine.evaluate(req(
+                "GET",
+                "/wp-admin/.env/shell",
+                "198.51.100.88",
+                browserHeaders(),
+                Map.of(),
+                "US"
+        ));
+        assertEquals(403, d.statusCode());
+    }
+
+    @Test
+    void blocked_requests_store_redacted_extended_context() {
+        AiwafConfig config = new AiwafConfig();
+        config.privateIpsExempted = false;
+        config.headerValidationEnabled = false;
+        config.rateLimitEnabled = false;
+        config.storeExtendedBlockInfo = true;
+        AiwafEngine engine = new AiwafEngine(config);
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", "Mozilla/5.0");
+        headers.put("Accept", "text/html");
+        headers.put("Authorization", "Bearer secret-token");
+        String ip = "198.51.100.91";
+
+        AiwafDecision d = engine.evaluate(req("GET", "/wp-admin/.env", ip, headers, Map.of("cmd", "id"), "US"));
+        assertEquals(403, d.statusCode());
+
+        Map<String, Object> block = BlacklistManager.getBlockInfo(ip);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ext = (Map<String, Object>) block.get("extended_request_info");
+        @SuppressWarnings("unchecked")
+        Map<String, String> extHeaders = (Map<String, String>) ext.get("headers");
+        assertEquals("[redacted]", extHeaders.get("Authorization"));
+        assertEquals("/wp-admin/.env", ext.get("path"));
+    }
+
+    @Test
+    void observability_counters_are_recorded_for_allow_and_block_paths() {
+        AiwafConfig config = new AiwafConfig();
+        config.privateIpsExempted = false;
+        config.headerValidationEnabled = false;
+        config.rateLimitEnabled = true;
+        config.rateLimitMax = 1;
+        config.observabilityEnabled = true;
+        AiwafEngine engine = new AiwafEngine(config);
+
+        engine.evaluate(req("GET", "/ok", "198.51.100.92", browserHeaders(), Map.of(), "US"));
+        engine.evaluate(req("GET", "/ok", "198.51.100.92", browserHeaders(), Map.of(), "US"));
+
+        var counters = engine.telemetry().counterSnapshot();
+        var h = engine.telemetry().histogramSnapshot();
+        assertTrue(counters.getOrDefault("requests.total", 0L) >= 2L);
+        assertTrue(counters.getOrDefault("requests.allowed", 0L) >= 1L);
+        assertTrue(counters.getOrDefault("requests.blocked", 0L) >= 1L);
+        assertFalse(h.isEmpty());
     }
 
     private static AiwafRequest req(
