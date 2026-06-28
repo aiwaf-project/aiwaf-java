@@ -173,6 +173,9 @@ public final class AiwafConfig {
     public int blockInfoMaxHeaderValueLength = 512;
     public Set<String> blockInfoRedactHeaders = new HashSet<>(Set.of("authorization", "cookie", "set-cookie"));
     public boolean observabilityEnabled = true;
+    public boolean loggingEnabled = true;
+    public String logDir = "aiwaf_logs";
+    public String logFormat = "combined";
     public String storageBackend = "memory";
     public String storageFilePath = null;
     public Set<String> legitimateRouteHints = new HashSet<>();

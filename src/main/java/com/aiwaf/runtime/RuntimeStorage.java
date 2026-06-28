@@ -16,6 +16,7 @@ public final class RuntimeStorage {
             case "memory" -> backend = new MemoryStorage();
             case "file" -> backend = new FileStorage(filePath == null ? "aiwaf_data.bin" : filePath);
             case "csv" -> backend = new CsvStorage(filePath == null ? "aiwaf_data.csv" : filePath);
+            case "db" -> backend = new DbStorage(filePath == null ? "aiwaf_data.db" : filePath);
             default -> throw new IllegalArgumentException("Unknown storage backend: " + backendType);
         }
         exemptionStore = new ExemptionStore(backend);

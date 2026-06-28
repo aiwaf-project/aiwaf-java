@@ -29,6 +29,7 @@ public final class AiwafConsole {
                 case "geo" -> handleGeo(manager, args);
                 case "exempt-path", "path-exemptions" -> handleExemptPath(manager, args);
                 case "whois" -> handleWhois(args);
+                case "generate-manifest" -> handleGenerateManifest(args);
                 default -> printUsage();
             }
         } catch (Exception ex) {
@@ -114,7 +115,8 @@ public final class AiwafConsole {
                 "  aiwaf-cli reset [--blacklist|--exemptions|--keywords|--blacklist-only|--exemptions-only]",
                 "  aiwaf-cli geo <list|add|remove> [country]",
                 "  aiwaf-cli exempt-path <list|add|remove> [path] [--reason text]",
-                "  aiwaf-cli whois <target>"
+                "  aiwaf-cli whois <target>",
+                "  aiwaf-cli generate-manifest <output.json> --class <ControllerClassName>"
         );
         for (String line : lines) {
             System.out.println(line);
@@ -161,6 +163,26 @@ public final class AiwafConsole {
             System.out.println("WHOIS result: " + result);
         } catch (IOException ex) {
             System.out.println("python-whois is not installed or whois command unavailable");
+        }
+    }
+
+    private static void handleGenerateManifest(String[] args) {
+        String output = args.length > 1 && !args[1].startsWith("--") ? args[1] : "manifest.json";
+        String clsName = parseOption(args, "--class");
+        if (clsName == null) {
+            System.out.println("Usage: aiwaf-cli generate-manifest <output.json> --class <ControllerClassName>");
+            return;
+        }
+        try {
+            Class<?> cls = Class.forName(clsName);
+            List<com.aiwaf.core.PathManifestCore.RouteInfo> routes = new java.util.ArrayList<>();
+            for (java.lang.reflect.Method m : cls.getMethods()) {
+                if (m.getDeclaringClass() == Object.class) continue;
+                routes.add(new com.aiwaf.core.PathManifestCore.RouteInfo("/" + m.getName(), List.of("GET", "POST"), cls, m));
+            }
+            com.aiwaf.core.PathManifestCore.generateManifest(routes, output);
+        } catch (Exception e) {
+            System.err.println("Error generating manifest: " + e.getMessage());
         }
     }
 

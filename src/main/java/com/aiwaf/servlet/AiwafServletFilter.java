@@ -1,5 +1,7 @@
 package com.aiwaf.servlet;
 
+import com.aiwaf.core.AiwafLoggingCore;
+import com.aiwaf.core.AiwafRequest;
 import com.aiwaf.core.AiwafDecision;
 import com.aiwaf.core.AiwafEngine;
 import com.aiwaf.core.ServletRequestMapper;
@@ -26,11 +28,15 @@ public final class AiwafServletFilter implements Filter {
             chain.doFilter(request, response);
             return;
         }
-        AiwafDecision decision = engine.evaluate(ServletRequestMapper.from(httpReq));
+        long start = System.currentTimeMillis();
+        AiwafRequest aiwafReq = ServletRequestMapper.from(httpReq);
+        AiwafDecision decision = engine.evaluate(aiwafReq);
         if (!decision.allowed()) {
             httpResp.sendError(decision.statusCode(), decision.reason());
+            AiwafLoggingCore.log(engine.config(), aiwafReq, decision, decision.statusCode(), System.currentTimeMillis() - start, 0);
             return;
         }
         chain.doFilter(request, response);
+        AiwafLoggingCore.log(engine.config(), aiwafReq, decision, httpResp.getStatus(), System.currentTimeMillis() - start, 0);
     }
 }

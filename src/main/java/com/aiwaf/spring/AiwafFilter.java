@@ -1,5 +1,7 @@
 package com.aiwaf.spring;
 
+import com.aiwaf.core.AiwafLoggingCore;
+import com.aiwaf.core.AiwafRequest;
 import com.aiwaf.core.AiwafDecision;
 import com.aiwaf.core.AiwafEngine;
 import com.aiwaf.core.LegitimateRouteKeywordsCore;
@@ -55,13 +57,17 @@ public final class AiwafFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
+        long start = System.currentTimeMillis();
         Set<String> disabledMiddlewares = resolveDisabledMiddlewares(request);
-        AiwafDecision decision = engine.evaluate(ServletRequestMapper.from(request, disabledMiddlewares));
+        AiwafRequest aiwafReq = ServletRequestMapper.from(request, disabledMiddlewares);
+        AiwafDecision decision = engine.evaluate(aiwafReq);
         if (!decision.allowed()) {
             response.sendError(decision.statusCode(), decision.reason());
+            AiwafLoggingCore.log(engine.config(), aiwafReq, decision, decision.statusCode(), System.currentTimeMillis() - start, 0);
             return;
         }
         filterChain.doFilter(request, response);
+        AiwafLoggingCore.log(engine.config(), aiwafReq, decision, response.getStatus(), System.currentTimeMillis() - start, 0);
     }
 
     private Set<String> resolveDisabledMiddlewares(HttpServletRequest request) {
