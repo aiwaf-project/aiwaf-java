@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
@@ -34,6 +35,7 @@ public final class CoreCli {
             return switch (cmd) {
                 case "analyze-request" -> handleAnalyzeRequest(argv);
                 case "analyze-behavior" -> handleAnalyzeBehavior(argv);
+                case "train-model" -> handleTrainModel(argv);
                 case "replay" -> handleReplay(argv);
                 case "reset" -> handleReset(argv);
                 case "list" -> handleList(argv);
@@ -72,6 +74,107 @@ public final class CoreCli {
         List<NormalizedEvent> events = loadEvents(eventsPath);
         TrainingCore.analyzeBehavior(events, List.of(), null, false);
         return 0;
+    }
+
+    private static int handleTrainModel(String[] argv) throws Exception {
+        String eventsPath = optionValue(argv, "--events");
+        String outPath = optionValue(argv, "--out");
+        if (eventsPath == null || outPath == null) {
+            return 2;
+        }
+        String backend = optionValue(argv, "--backend");
+        if (backend == null || backend.isBlank()) {
+            backend = "fastr";
+        }
+        List<NormalizedEvent> events = loadEvents(eventsPath);
+        if (events.isEmpty()) {
+            return 1;
+        }
+        TrainedModelCore model;
+        if ("java".equalsIgnoreCase(backend)) {
+            model = TrainingCore.trainModel(events, List.of());
+        } else if ("fastr".equalsIgnoreCase(backend)) {
+            model = trainWithFastR(argv, eventsPath);
+            if (model == null) {
+                model = TrainingCore.trainModel(events, List.of());
+            }
+        } else {
+            return 2;
+        }
+        return ModelArtifactIoCore.save(model, outPath) ? 0 : 1;
+    }
+
+    private static TrainedModelCore trainWithFastR(String[] argv, String eventsPath) throws Exception {
+        String command = resolveFastRCommand(argv);
+        String script = optionValue(argv, "--fastr-script");
+        if (script == null || script.isBlank()) {
+            script = "scripts/fastr/train_iforest.R";
+        }
+        Path jsonOut = Files.createTempFile("aiwaf-fastr-model-", ".json");
+        try {
+            Process process = new ProcessBuilder(
+                    command,
+                    script,
+                    "--events",
+                    eventsPath,
+                    "--out",
+                    jsonOut.toString()
+            ).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            int exit = process.waitFor();
+            if (exit != 0) {
+                return null;
+            }
+            return FastRModelImportCore.load(jsonOut);
+        } catch (Exception ex) {
+            return null;
+        } finally {
+            Files.deleteIfExists(jsonOut);
+        }
+    }
+
+    private static String resolveFastRCommand(String[] argv) {
+        String command = optionValue(argv, "--fastr-command");
+        if (command != null && !command.isBlank()) {
+            return command;
+        }
+        command = System.getenv("AIWAF_FASTR_CMD");
+        if (command != null && !command.isBlank()) {
+            return command;
+        }
+        if (isWindows()) {
+            String discovered = discoverWindowsRscript();
+            if (discovered != null) {
+                return discovered;
+            }
+        }
+        return "Rscript";
+    }
+
+    private static String discoverWindowsRscript() {
+        String programFiles = System.getenv().getOrDefault("ProgramFiles", "C:\\Program Files");
+        Path root = Path.of(programFiles, "R");
+        if (!Files.isDirectory(root)) {
+            return null;
+        }
+        try (var versions = Files.list(root)) {
+            return versions
+                    .filter(Files::isDirectory)
+                    .sorted(Comparator.comparing(Path::toString).reversed())
+                    .flatMap(version -> List.of(
+                            version.resolve("bin").resolve("Rscript.exe"),
+                            version.resolve("bin").resolve("x64").resolve("Rscript.exe")
+                    ).stream())
+                    .filter(Files::isRegularFile)
+                    .map(Path::toString)
+                    .findFirst()
+                    .orElse(null);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
     }
 
     private static int handleReplay(String[] argv) throws Exception {

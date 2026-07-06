@@ -6,8 +6,8 @@ AIWAF Java is a Java-native web application firewall implementation for Servlet 
 
 Published coordinates:
 
-- Version: `0.2.0`
-- Maven package URL: `pkg:maven/io.github.aiwaf-project/aiwaf-java@0.2.0`
+- Version: `1.0.1`
+- Maven package URL: `pkg:maven/io.github.aiwaf-project/aiwaf-java@1.0.1`
 
 Add to your project:
 
@@ -15,7 +15,7 @@ Add to your project:
 <dependency>
     <groupId>io.github.aiwaf-project</groupId>
     <artifactId>aiwaf-java</artifactId>
-    <version>0.2.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
@@ -32,12 +32,15 @@ Add to your project:
 - [Runtime Storage Backends](#runtime-storage-backends)
 - [GeoIP Behavior](#geoip-behavior)
 - [CLI Components](#cli-components)
+- [AI Model Lifecycle](#ai-model-lifecycle)
+- [Runtime Telemetry](#runtime-telemetry)
 - [Project Layout](#project-layout)
 - [Build and Test](#build-and-test)
 - [Examples and Sandbox](#examples-and-sandbox)
 - [Expected Sandbox Outcomes](#expected-sandbox-outcomes)
 - [Troubleshooting](#troubleshooting)
 - [Known Limitations](#known-limitations)
+- [Release Publishing](#release-publishing)
 - [Developer Workflow](#developer-workflow)
 
 ## What This Project Is
@@ -63,6 +66,7 @@ Primary objective: consistent and testable Java behavior for AIWAF controls, inc
 - Middleware alias normalization supports underscore and hyphen forms (e.g. `rate_limit`, `rate-limit`).
 - sklearn-like Isolation Forest implementation is included in core (`IsolationForestCore`) and integrated into training/runtime AI anomaly checks.
 - Model artifact persistence, validation, and schema migration are implemented (`ModelArtifactIoCore`, `ModelArtifactMigrationCore`, `LazyModelProviderCore`).
+- Offline AI retraining can use FastR/R first and falls back to Java training when R is unavailable.
 - Runtime observability is available via built-in telemetry counters/histograms (`AiwafTelemetryCore`).
 - Python-style structured config compatibility and env/property override mapping are available (`AiwafConfigCompatCore`).
 
@@ -255,14 +259,46 @@ Design notes:
 - `AiwafConsole`
 - `RouteShellHelpers`
 
-These are covered by logic tests in `src/test/java/com/aiwaf/cli`.
+`com.aiwaf.core.CoreCli` provides testable core commands, including:
+
+- `analyze-request --request <request.json>`
+- `analyze-behavior --events <events.json>`
+- `train-model --events <events.json> --out <aiwaf-model.bin> --backend fastr|java`
+- `replay --cases <replay_cases.json>`
+- `reset --targets <all|features,models,events,replay>`
+- `list --targets <all|features,models,events,replay>`
+
+These are covered by logic tests in `src/test/java/com/aiwaf/cli` and `src/test/java/com/aiwaf/core`.
 
 ## AI Model Lifecycle
 
+- Runtime scoring stays Java-native through `IsolationForestCore`.
+- Offline retraining defaults to FastR/R through `CoreCli train-model --backend fastr`.
+- If R, `jsonlite`, or the FastR script is unavailable, retraining falls back to Java training and still writes a loadable artifact.
+- The FastR retrainer lives at `scripts/fastr/train_iforest.R` and emits neutral IF JSON.
+- `FastRModelImportCore` converts FastR JSON into the existing Java `TrainedModelCore`/`IsolationForestCore.Model` artifact shape.
 - Trainer emits IF-backed model payloads with metadata/version markers.
 - Runtime supports eager or lazy model loading (`LazyModelProviderCore`).
 - Artifact compatibility is validated on load; incompatible schema is rejected unless a migration path is available.
 - Migration logic currently covers supported legacy IF payload shapes and normalizes to current schema.
+
+Example retraining call:
+
+```java
+// FastR/R first; falls back to Java if R is unavailable.
+int rc = CoreCli.main(new String[]{
+    "train-model",
+    "--events", "events.json",
+    "--out", "aiwaf-model.bin",
+    "--backend", "fastr"
+});
+```
+
+FastR/R requirements:
+
+- `Rscript` on `PATH`, or set `AIWAF_FASTR_CMD`, or pass `--fastr-command`.
+- R package `jsonlite`.
+- A project-local `.r-lib/` is automatically included by `scripts/fastr/train_iforest.R` if present.
 
 ## Runtime Telemetry
 
@@ -281,6 +317,8 @@ Use `AiwafEngine.telemetry()` for in-process metrics snapshots.
 - `src/main/java/com/aiwaf/servlet` — servlet filter adapter
 - `src/main/java/com/aiwaf/cli` — CLI/manager utilities
 - `src/test/java` — parity, runtime, integration, and route-decision tests
+- `scripts/fastr` — FastR/R offline Isolation Forest retraining script
+- `.github/workflows` — CI/release automation, including Maven Central publishing
 - `examples/sandbox` — runnable proxy demo + attack/compare utilities
 
 ## Build and Test
@@ -289,6 +327,7 @@ Requirements:
 
 - Java 17+
 - Maven 3.9+
+- Optional for real FastR retraining tests: `Rscript` and R package `jsonlite`
 
 Run full test suite:
 
@@ -300,6 +339,14 @@ Run focused test sets:
 
 ```bash
 mvn -Dmaven.repo.local=/tmp/m2repo -q -Dtest=AiwafRouteDecisionsTest,JavaFrameworkAiwafEndToEndTest,AiwafEngineParityTest test
+```
+
+FastR integration tests are written to skip cleanly when R or `jsonlite` is unavailable. To run them locally:
+
+```bash
+mkdir -p .r-lib
+R_LIBS_USER="$PWD/.r-lib" Rscript -e "install.packages('jsonlite', repos='https://cloud.r-project.org')"
+mvn -q -Dtest=FastRTrainingScriptIntegrationTest,FastRModelImportCoreTest,CoreCliParityTest test
 ```
 
 ## Examples and Sandbox
@@ -367,11 +414,18 @@ Typical expectation:
 5. Geo behavior unexpected
 - Verify MMDB file presence and external lookup tooling availability.
 
+6. FastR retraining falls back to Java
+- Verify `Rscript --version`.
+- Verify `Rscript -e "requireNamespace('jsonlite', quietly=TRUE)"` returns `TRUE`.
+- Set `AIWAF_FASTR_CMD` or pass `--fastr-command` if `Rscript` is not on `PATH`.
+- Use a local `.r-lib/` for R packages when the system library is not writable.
+
 ## Known Limitations
 
 - Sandbox attack suite is synthetic; it is useful for comparative checks, not production benchmarking.
 - Direct baseline behavior depends on upstream app/runtime behavior and transport characteristics.
 - Route annotation semantics are explicit and test-backed, but framework-level path normalization differences can still influence edge responses.
+
 
 ## Developer Workflow
 

@@ -20,6 +20,9 @@ Thumbs.db
 # Local Maven cache override artifacts (if used locally)
 .mvn/
 
+# Local R package library for FastR retraining dependencies
+.r-lib/
+
 # Sandbox generated outputs
 examples/sandbox/results_*.json
 
