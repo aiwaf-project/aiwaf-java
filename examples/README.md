@@ -1,30 +1,15 @@
 # AIWAF Java Examples
 
-This folder contains Java implementations of runnable AIWAF examples.
+This folder contains small Java examples for AIWAF configuration and integration.
 
 ## Example Projects
 
-- `sandbox/aiwaf-java/`: plain Java reverse proxy protected by `AiwafEngine`.
-- `sandbox/aiwaf-spring/`: Spring Boot reverse proxy protected by `AiwafFilter`.
-- `sandbox/`: sandbox utilities and additional compatibility proxies.
+- `ConfigExample.java`: basic configuration example for constructing and using AIWAF settings.
 
-## Build Docker Images
+## Compile
 
 From repository root:
 
 ```bash
-docker build -f examples/sandbox/aiwaf-java/Dockerfile -t aiwaf-java-example .
-docker build -f examples/sandbox/aiwaf-spring/Dockerfile -t aiwaf-spring-example .
+javac -cp target/classes examples/ConfigExample.java
 ```
-
-## Run Together
-
-```bash
-docker compose -f examples/sandbox/docker-compose.yml up --build
-```
-
-Endpoints:
-
-- `http://localhost:8080` -> aiwaf-java proxy
-- `http://localhost:8081` -> aiwaf-spring proxy
-- `http://localhost:3001` -> direct Juice Shop

@@ -1,6 +1,6 @@
 # AIWAF Java
 
-AIWAF Java is a Java-native web application firewall implementation for Servlet and Spring applications, with parity-oriented core logic and runnable sandbox examples.
+AIWAF Java is a Java-native web application firewall implementation for Servlet and Spring applications, with parity-oriented core logic and focused configuration examples.
 
 ## Maven Artifact
 
@@ -36,8 +36,7 @@ Add to your project:
 - [Runtime Telemetry](#runtime-telemetry)
 - [Project Layout](#project-layout)
 - [Build and Test](#build-and-test)
-- [Examples and Sandbox](#examples-and-sandbox)
-- [Expected Sandbox Outcomes](#expected-sandbox-outcomes)
+- [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
 - [Known Limitations](#known-limitations)
 - [Release Publishing](#release-publishing)
@@ -52,16 +51,13 @@ This repository provides:
 - Spring filter/interceptor + route annotation support: `com.aiwaf.spring.*`
 - Generic servlet filter support: `com.aiwaf.servlet.*`
 - CLI/admin utilities: `com.aiwaf.cli.*`
-- Dockerized sandbox proxies and attack/compare tools: `examples/sandbox/*`
+- Small configuration examples: `examples/*`
 
 Primary objective: consistent and testable Java behavior for AIWAF controls, including parity-driven rules and route-level policy decisions.
 
 ## Current Status
 
 - Java core and Spring integrations are implemented and covered by parity/integration tests.
-- Sandbox includes two maintained Java proxies:
-  - `aiwaf-java` (plain Java reverse proxy)
-  - `aiwaf-spring` (Spring Boot reverse proxy)
 - Route annotation behavior (`@AiwafExempt`, `@AiwafExemptFrom`, `@AiwafOnly`, `@AiwafRequireProtection`) is implemented and tested.
 - Middleware alias normalization supports underscore and hyphen forms (e.g. `rate_limit`, `rate-limit`).
 - sklearn-like Isolation Forest implementation is included in core (`IsolationForestCore`) and integrated into training/runtime AI anomaly checks.
@@ -319,7 +315,7 @@ Use `AiwafEngine.telemetry()` for in-process metrics snapshots.
 - `src/test/java` — parity, runtime, integration, and route-decision tests
 - `scripts/fastr` — FastR/R offline Isolation Forest retraining script
 - `.github/workflows` — CI/release automation, including Maven Central publishing
-- `examples/sandbox` — runnable proxy demo + attack/compare utilities
+- `examples` — focused configuration examples
 
 ## Build and Test
 
@@ -349,72 +345,18 @@ R_LIBS_USER="$PWD/.r-lib" Rscript -e "install.packages('jsonlite', repos='https:
 mvn -q -Dtest=FastRTrainingScriptIntegrationTest,FastRModelImportCoreTest,CoreCliParityTest test
 ```
 
-## Examples and Sandbox
+## Examples
 
-Detailed guide: [examples/sandbox/README.md](examples/sandbox/README.md)
+Example guide: [examples/README.md](examples/README.md)
 
-Quick start:
-
-```bash
-docker compose -f examples/sandbox/docker-compose.yml up -d --build
-```
-
-Services:
-
-- `http://localhost:8080` — `protected_java`
-- `http://localhost:8081` — `protected_spring`
-- `http://localhost:3001` — direct baseline
-
-Run suite:
-
-```bash
-cd examples/sandbox
-javac --release 17 AttackSuite.java CompareResults.java CompareResultsModes.java RunAndCompare.java
-java AttackSuite http://127.0.0.1:3001 direct normal
-java AttackSuite http://127.0.0.1:3001 direct attacks
-java AttackSuite http://localhost:8080 protected_java normal
-java AttackSuite http://localhost:8080 protected_java attacks
-java AttackSuite http://localhost:8081 protected_spring normal
-java AttackSuite http://localhost:8081 protected_spring attacks
-```
-
-Compare:
-
-```bash
-java CompareResults results_direct_*.json results_protected_*.json
-java CompareResultsModes results_protected_java_normal_*.json results_protected_spring_normal_*.json -- results_protected_java_attacks_*.json results_protected_spring_attacks_*.json
-```
-
-## Expected Sandbox Outcomes
-
-Typical expectation:
-
-- Protected normal traffic: allowed (`2xx`) in most/all cases.
-- Protected attack traffic: blocked (`403/429`) in most/all cases.
-- Direct traffic: reflects baseline app behavior without WAF controls.
+Current examples focus on local configuration and API usage rather than runnable attack sandboxes.
 
 ## Troubleshooting
 
-1. `docker compose up` says no config found
-- Use explicit file:
-  - `docker compose -f examples/sandbox/docker-compose.yml up --build`
-
-2. Java class version mismatch (e.g. class file version 69)
-- Recompile tools targeting Java 17:
-  - `javac --release 17 AttackSuite.java CompareResults.java CompareResultsModes.java RunAndCompare.java`
-
-3. NoClassDefFoundError in example containers
-- Ensure example JAR packaging includes dependencies (fat jar/shaded where needed).
-- Rebuild images with `--build`.
-
-4. Stale or noisy result files
-- Use cleanup helper:
-  - `cd examples/sandbox && ./clean-results.sh`
-
-5. Geo behavior unexpected
+1. Geo behavior unexpected
 - Verify MMDB file presence and external lookup tooling availability.
 
-6. FastR retraining falls back to Java
+2. FastR retraining falls back to Java
 - Verify `Rscript --version`.
 - Verify `Rscript -e "requireNamespace('jsonlite', quietly=TRUE)"` returns `TRUE`.
 - Set `AIWAF_FASTR_CMD` or pass `--fastr-command` if `Rscript` is not on `PATH`.
@@ -422,8 +364,6 @@ Typical expectation:
 
 ## Known Limitations
 
-- Sandbox attack suite is synthetic; it is useful for comparative checks, not production benchmarking.
-- Direct baseline behavior depends on upstream app/runtime behavior and transport characteristics.
 - Route annotation semantics are explicit and test-backed, but framework-level path normalization differences can still influence edge responses.
 
 
@@ -434,5 +374,4 @@ Typical cycle:
 1. Implement change in `core`/`spring`/`runtime`
 2. Run focused tests for affected areas
 3. Run full `mvn test`
-4. Rebuild sandbox and run attack/compare workflow
-5. Clean results before committing if desired
+4. Run any integration or release-specific checks before committing
