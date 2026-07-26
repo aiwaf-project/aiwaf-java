@@ -1,8 +1,6 @@
 package com.aiwaf.core;
 
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,12 +18,11 @@ public final class ModelArtifactIoCore {
         }
         try {
             Path p = Path.of(path);
-            if (p.getParent() != null) {
-                Files.createDirectories(p.getParent());
-            }
-            try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(p.toFile()))) {
-                out.writeObject(model);
-            }
+            SecureFiles.writeAtomically(p, output -> {
+                try (ObjectOutputStream out = new ObjectOutputStream(output)) {
+                    out.writeObject(model);
+                }
+            });
             return true;
         } catch (Exception ex) {
             return false;
@@ -41,7 +38,13 @@ public final class ModelArtifactIoCore {
             if (!Files.exists(p)) {
                 return null;
             }
-            try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(p.toFile()))) {
+            SecureFiles.rejectSymbolicLinks(p);
+            if (!SecureFiles.verifySignature(p)) {
+                LOG.warning("Ignoring AIWAF model artifact with invalid or missing signature");
+                return null;
+            }
+            try (var in = SafeObjectInputStreams.open(
+                    new FileInputStream(p.toFile()), SafeObjectInputStreams.Profile.MODEL)) {
                 Object obj = in.readObject();
                 if (obj instanceof TrainedModelCore model) {
                     TrainedModelCore migrated = ModelArtifactMigrationCore.migrate(model);
@@ -51,7 +54,8 @@ public final class ModelArtifactIoCore {
                     return migrated;
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            LOG.warning("Unable to load AIWAF model artifact: " + ex.getClass().getSimpleName());
         }
         return null;
     }

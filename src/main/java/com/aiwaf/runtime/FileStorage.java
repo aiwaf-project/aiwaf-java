@@ -1,8 +1,9 @@
 package com.aiwaf.runtime;
 
+import com.aiwaf.core.SafeObjectInputStreams;
+import com.aiwaf.core.SecureFiles;
+
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,8 +11,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 public class FileStorage implements StorageBackend {
+    private static final Logger LOG = Logger.getLogger(FileStorage.class.getName());
     private static final class Entry implements java.io.Serializable {
         Object value;
         Long expiresAtMillis;
@@ -28,7 +31,13 @@ public class FileStorage implements StorageBackend {
     private synchronized void load() {
         try {
             if (!Files.exists(filePath)) return;
-            try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(filePath.toFile()))) {
+            SecureFiles.rejectSymbolicLinks(filePath);
+            if (!SecureFiles.verifySignature(filePath)) {
+                LOG.warning("Unable to verify file storage signature");
+                return;
+            }
+            try (var in = SafeObjectInputStreams.open(
+                    new FileInputStream(filePath.toFile()), SafeObjectInputStreams.Profile.STORAGE)) {
                 Object obj = in.readObject();
                 if (obj instanceof Map<?, ?> map) {
                     data.clear();
@@ -39,20 +48,21 @@ public class FileStorage implements StorageBackend {
                     }
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception ex) {
+            LOG.warning("Unable to load file storage: " + ex.getClass().getSimpleName());
             data.clear();
         }
     }
 
     private synchronized void save() {
         try {
-            if (filePath.getParent() != null) {
-                Files.createDirectories(filePath.getParent());
-            }
-            try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(filePath.toFile()))) {
-                out.writeObject(new ConcurrentHashMap<>(data));
-            }
-        } catch (Exception ignored) {
+            SecureFiles.writeAtomically(filePath, output -> {
+                try (ObjectOutputStream out = new ObjectOutputStream(output)) {
+                    out.writeObject(new java.util.HashMap<>(data));
+                }
+            });
+        } catch (Exception ex) {
+            LOG.warning("Unable to persist file storage: " + ex.getClass().getSimpleName());
         }
     }
 

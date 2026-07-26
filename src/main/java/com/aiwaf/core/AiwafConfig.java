@@ -112,8 +112,10 @@ public final class AiwafConfig {
     public boolean blockIpOnRateLimitBreach = false;
     public boolean blockIpOnFloodBreach = false;
     public int rateLimitFloodThreshold = 40;
+    public Set<String> trustedProxyCidrs = new HashSet<>(Set.of("127.0.0.0/8", "::1/128"));
+    public int maxForwardedForEntries = 16;
     public Set<String> exemptIps = new HashSet<>();
-    public boolean privateIpsExempted = true;
+    public boolean privateIpsExempted = false;
     public Set<String> autoExemptPathPrefixes = new HashSet<>();
     public Set<String> exemptPaths = new HashSet<>(Arrays.asList(
             "/favicon.ico", "/robots.txt", "/sitemap.xml", "/sitemap.txt", "/ads.txt", "/security.txt",
@@ -142,7 +144,7 @@ public final class AiwafConfig {
     ));
     public boolean uuidTamperEnabled = true;
     public boolean ipKeywordBlockEnabled = true;
-    public boolean methodValidationEnabled = false;
+    public boolean methodValidationEnabled = true;
     public Set<String> allowedMethods = new HashSet<>(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"));
     public Set<String> enabledMiddlewares = new HashSet<>();
     public Set<String> disabledMiddlewares = new HashSet<>();
@@ -150,6 +152,15 @@ public final class AiwafConfig {
     public int maxHeaderCount = 100;
     public int maxUserAgentLength = 500;
     public int maxAcceptLength = 4096;
+    public int maxRequestBodyBytes = 1024 * 1024;
+    public int requestBodyInspectionBytes = 64 * 1024;
+    public boolean requestBodyInspectionEnabled = true;
+    public boolean allowCompressedRequestBodies = false;
+    public int maxRuntimeStateEntries = 10_000;
+    public int maxParameterCount = 200;
+    public int maxParameterBytes = 16 * 1024;
+    public boolean allowDuplicateParameters = false;
+    public Map<String, Set<String>> allowedContentTypesByPathPrefix = new HashMap<>();
     public int minHeaderQualityScore = 3;
     public List<String> requiredHeaders = new ArrayList<>(HeaderValidationCore.REQUIRED_HEADERS);
     public Map<String, List<String>> requiredHeadersByMethod = new HashMap<>();
@@ -172,6 +183,11 @@ public final class AiwafConfig {
     public int blockInfoMaxHeaders = 50;
     public int blockInfoMaxHeaderValueLength = 512;
     public Set<String> blockInfoRedactHeaders = new HashSet<>(Set.of("authorization", "cookie", "set-cookie"));
+    public Set<String> sensitiveParameterNames = new HashSet<>(Set.of(
+            "password", "passwd", "pwd", "token", "access_token", "refresh_token",
+            "secret", "api_key", "apikey", "authorization", "code", "session", "sessionid"
+    ));
+    public boolean logQueryParameters = false;
     public boolean observabilityEnabled = true;
     public boolean loggingEnabled = true;
     public String logDir = "aiwaf_logs";

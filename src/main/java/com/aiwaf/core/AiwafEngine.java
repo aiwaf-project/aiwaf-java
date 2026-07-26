@@ -3,7 +3,6 @@ package com.aiwaf.core;
 import com.aiwaf.runtime.BlacklistManager;
 import com.aiwaf.runtime.RuntimeStorage;
 
-import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -12,12 +11,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 public final class AiwafEngine {
     private final AiwafConfig config;
-    private final Map<String, Deque<Long>> requestBuckets = new HashMap<>();
-    private final Map<String, Long> lastGetPerIpPath = new HashMap<>();
-    private final Map<String, Deque<RecentRequest>> recentRequestsByIp = new HashMap<>();
+    private final Map<String, Deque<Long>> requestBuckets = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastGetPerIpPath = new ConcurrentHashMap<>();
+    private final Map<String, Deque<RecentRequest>> recentRequestsByIp = new ConcurrentHashMap<>();
     private final LazyModelProviderCore modelProvider;
     private final AiwafTelemetryCore telemetry = new AiwafTelemetryCore();
     private final Set<String> defaultMaliciousKeywords = new HashSet<>(Set.of(
@@ -39,7 +40,7 @@ public final class AiwafEngine {
         }
     }
 
-    public synchronized void clearState() {
+    public void clearState() {
         requestBuckets.clear();
         lastGetPerIpPath.clear();
         recentRequestsByIp.clear();
@@ -54,9 +55,23 @@ public final class AiwafEngine {
         return telemetry;
     }
 
-    public synchronized AiwafDecision evaluate(AiwafRequest req) {
+    public AiwafDecision evaluate(AiwafRequest req) {
         long startedNs = System.nanoTime();
         telemetryIncrement("requests.total");
+        AiwafDecision requestShapeDecision = validateRequestShape(req);
+        if (requestShapeDecision != null) {
+            return finalizeDecision(requestShapeDecision, startedNs, "request_shape");
+        }
+        String contentEncoding = header(req.headers(), "content-encoding").trim();
+        if (!config.allowCompressedRequestBodies && !contentEncoding.isEmpty()
+                && !"identity".equalsIgnoreCase(contentEncoding)) {
+            AiwafDecision d = AiwafDecision.deny(415, "Compressed request bodies are not accepted");
+            return finalizeDecision(d, startedNs, "compressed_request_body");
+        }
+        if (containsJavaSerializationPayload(req)) {
+            AiwafDecision d = AiwafDecision.deny(415, "Java serialization payloads are not accepted");
+            return finalizeDecision(d, startedNs, "java_deserialization_payload");
+        }
         AiwafConfig.PathRule rule = ExemptionsCore.getPathRuleForPath(req.path(), config.pathRules);
         boolean headerValidationEnabled = config.headerValidationEnabled && !isRuleDisabled(req, rule, config, "header_validation");
         int maxRequests = resolveRateLimitOverride(rule, "max", config.rateLimitMax, rule == null ? null : rule.rateLimitMaxOverride);
@@ -110,7 +125,9 @@ public final class AiwafEngine {
         if (!pathExempted && !isRuleDisabled(req, rule, config, "honeypot") && config.honeypotEnabled) {
             String key = ip + "|" + req.path();
             if ("GET".equalsIgnoreCase(req.method())) {
-                lastGetPerIpPath.put(key, req.nowEpochMillis());
+                if (reserveStateEntry(lastGetPerIpPath, key)) {
+                    lastGetPerIpPath.put(key, req.nowEpochMillis());
+                }
             } else if ("POST".equalsIgnoreCase(req.method())) {
                 Long lastGet = lastGetPerIpPath.get(key);
                 if (lastGet != null) {
@@ -181,24 +198,31 @@ public final class AiwafEngine {
             String bucketKey = config.rateLimitScope == AiwafConfig.RateLimitScope.GLOBAL_IP
                     ? ip
                     : ip + "|" + req.path();
-            Deque<Long> bucket = requestBuckets.computeIfAbsent(bucketKey, k -> new ArrayDeque<>());
+            if (!reserveRateLimitEntry(bucketKey, req.nowEpochMillis(), windowSeconds)) {
+                telemetryIncrement("middleware.rate_limit.capacity");
+                AiwafDecision d = AiwafDecision.deny(429, "Rate limiter capacity exceeded");
+                return finalizeDecision(d, startedNs, "rate_limit_capacity");
+            }
+            Deque<Long> bucket = requestBuckets.computeIfAbsent(bucketKey, k -> new ConcurrentLinkedDeque<>());
             long threshold = req.nowEpochMillis() - (windowSeconds * 1000L);
-            while (!bucket.isEmpty() && bucket.peekFirst() < threshold) {
-                bucket.pollFirst();
+            synchronized (bucket) {
+                while (!bucket.isEmpty() && bucket.peekFirst() < threshold) {
+                    bucket.pollFirst();
+                }
+                if (bucket.size() >= floodThreshold) {
+                    if (config.blockIpOnFloodBreach) blockWithContext(ip, req, "Flood pattern");
+                    telemetryIncrement("middleware.rate_limit.flood");
+                    AiwafDecision d = AiwafDecision.deny(403, "Flood pattern");
+                    return finalizeDecision(d, startedNs, "rate_limit_flood");
+                }
+                if (bucket.size() >= maxRequests) {
+                    if (config.blockIpOnRateLimitBreach) blockWithContext(ip, req, "Rate limit exceeded");
+                    telemetryIncrement("middleware.rate_limit.exceeded");
+                    AiwafDecision d = AiwafDecision.deny(429, "Rate limit exceeded");
+                    return finalizeDecision(d, startedNs, "rate_limit");
+                }
+                bucket.addLast(req.nowEpochMillis());
             }
-            if (bucket.size() >= floodThreshold) {
-                if (config.blockIpOnFloodBreach) blockWithContext(ip, req, "Flood pattern");
-                telemetryIncrement("middleware.rate_limit.flood");
-                AiwafDecision d = AiwafDecision.deny(403, "Flood pattern");
-                return finalizeDecision(d, startedNs, "rate_limit_flood");
-            }
-            if (bucket.size() >= maxRequests) {
-                if (config.blockIpOnRateLimitBreach) blockWithContext(ip, req, "Rate limit exceeded");
-                telemetryIncrement("middleware.rate_limit.exceeded");
-                AiwafDecision d = AiwafDecision.deny(429, "Rate limit exceeded");
-                return finalizeDecision(d, startedNs, "rate_limit");
-            }
-            bucket.addLast(req.nowEpochMillis());
         }
 
         if (!pathExempted && !ipExempted && config.aiEnabled) {
@@ -212,6 +236,99 @@ public final class AiwafEngine {
         AiwafDecision allow = AiwafDecision.allow();
         recordRecent(ip, req, allow.statusCode());
         return finalizeDecision(allow, startedNs, "allow");
+    }
+
+    private static boolean containsJavaSerializationPayload(AiwafRequest req) {
+        String contentType = header(req.headers(), "content-type").toLowerCase(Locale.ROOT);
+        int separator = contentType.indexOf(';');
+        String mediaType = (separator >= 0 ? contentType.substring(0, separator) : contentType).trim();
+        if (Set.of(
+                "application/x-java-serialized-object",
+                "application/java-serialized-object",
+                "application/x-java-object",
+                "application/x-java-serialization"
+        ).contains(mediaType)) {
+            return true;
+        }
+        if (looksLikeSerializedValue(req.path())) {
+            return true;
+        }
+        for (String value : req.query().values()) {
+            if (looksLikeSerializedValue(value)) {
+                return true;
+            }
+        }
+        return looksLikeSerializedValue(req.bodyPreview());
+    }
+
+    private AiwafDecision validateRequestShape(AiwafRequest req) {
+        Map<String, String> parameters = req.query() == null ? Map.of() : req.query();
+        if (parameters.size() > Math.max(1, config.maxParameterCount)) {
+            return AiwafDecision.deny(400, "Too many request parameters");
+        }
+        long bytes = 0;
+        for (Map.Entry<String, String> entry : parameters.entrySet()) {
+            bytes += utf8Length(entry.getKey()) + utf8Length(entry.getValue());
+            if (bytes > Math.max(1, config.maxParameterBytes)) {
+                return AiwafDecision.deny(400, "Request parameters too large");
+            }
+        }
+        if (!config.allowDuplicateParameters
+                && "true".equalsIgnoreCase(header(req.headers(), "aiwaf-internal-duplicate-parameters"))) {
+            return AiwafDecision.deny(400, "Duplicate request parameters are not accepted");
+        }
+
+        Set<String> allowed = allowedContentTypes(req.path());
+        if (!allowed.isEmpty() && hasRequestBody(req.method())) {
+            String contentType = header(req.headers(), "content-type").toLowerCase(Locale.ROOT);
+            int separator = contentType.indexOf(';');
+            String mediaType = (separator < 0 ? contentType : contentType.substring(0, separator)).trim();
+            if (mediaType.isEmpty() || allowed.stream().noneMatch(v -> v.equalsIgnoreCase(mediaType))) {
+                return AiwafDecision.deny(415, "Content-Type is not allowed for this route");
+            }
+        }
+        return null;
+    }
+
+    private Set<String> allowedContentTypes(String path) {
+        String value = path == null ? "/" : path;
+        String best = "";
+        Set<String> result = Set.of();
+        for (Map.Entry<String, Set<String>> entry : config.allowedContentTypesByPathPrefix.entrySet()) {
+            String prefix = entry.getKey();
+            if (prefix != null && value.startsWith(prefix) && prefix.length() > best.length()) {
+                best = prefix;
+                result = entry.getValue() == null ? Set.of() : entry.getValue();
+            }
+        }
+        return result;
+    }
+
+    private static boolean hasRequestBody(String method) {
+        return Set.of("POST", "PUT", "PATCH").contains(method == null ? "" : method.toUpperCase(Locale.ROOT));
+    }
+
+    private static int utf8Length(String value) {
+        return value == null ? 0 : value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+    }
+
+    private static boolean looksLikeSerializedValue(String value) {
+        if (value == null) return false;
+        String compact = value.strip().replaceAll("\\s+", "");
+        String lower = compact.toLowerCase(Locale.ROOT);
+        return compact.contains("rO0AB")
+                || lower.contains("aced0005")
+                || lower.contains("%ac%ed%00%05");
+    }
+
+    private static String header(Map<String, String> headers, String name) {
+        if (headers == null) return "";
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (name.equalsIgnoreCase(entry.getKey())) {
+                return entry.getValue() == null ? "" : entry.getValue();
+            }
+        }
+        return "";
     }
 
     private static boolean isRuleDisabled(AiwafRequest req, AiwafConfig.PathRule rule, AiwafConfig config, String middlewareName) {
@@ -433,7 +550,15 @@ public final class AiwafEngine {
         out.put("method", blankToDefault(req.method(), ""));
         out.put("path", blankToDefault(req.path(), ""));
         if (req.query() != null && !req.query().isEmpty()) {
-            out.put("query", new HashMap<>(req.query()));
+            Map<String, String> safeQuery = new HashMap<>();
+            for (Map.Entry<String, String> entry : req.query().entrySet()) {
+                String key = entry.getKey() == null ? "" : entry.getKey();
+                boolean sensitive = config.sensitiveParameterNames.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .anyMatch(name -> name.equalsIgnoreCase(key));
+                safeQuery.put(key, sensitive ? "[redacted]" : entry.getValue());
+            }
+            out.put("query", safeQuery);
         }
         out.put("headers", redactHeaders(req.headers()));
         return out;
@@ -491,12 +616,47 @@ public final class AiwafEngine {
     }
 
     private void recordRecent(String ip, AiwafRequest req, int statusCode) {
-        Deque<RecentRequest> queue = recentRequestsByIp.computeIfAbsent(ip, k -> new ArrayDeque<>());
+        if (!reserveRecentEntry(ip, req.nowEpochMillis())) return;
+        Deque<RecentRequest> queue = recentRequestsByIp.computeIfAbsent(ip, k -> new ConcurrentLinkedDeque<>());
         queue.addLast(new RecentRequest(req.nowEpochMillis(), req.path(), statusCode));
         long cutoff = req.nowEpochMillis() - (config.aiRecentWindowSeconds * 1000L);
         while (!queue.isEmpty() && queue.peekFirst().timestampMillis() < cutoff) {
             queue.pollFirst();
         }
+        if (queue.isEmpty()) recentRequestsByIp.remove(ip, queue);
+    }
+
+    private synchronized boolean reserveStateEntry(Map<String, Long> map, String key) {
+        if (map.containsKey(key)) return true;
+        int max = Math.max(100, config.maxRuntimeStateEntries);
+        if (map.size() < max) return true;
+        long cutoff = System.currentTimeMillis() - Math.max(60_000L, (long) (config.maxFormPageTimeSeconds * 1000L));
+        map.entrySet().removeIf(entry -> entry.getValue() < cutoff);
+        return map.size() < max;
+    }
+
+    private synchronized boolean reserveRateLimitEntry(String key, long nowMillis, int windowSeconds) {
+        if (requestBuckets.containsKey(key)) return true;
+        int max = Math.max(100, config.maxRuntimeStateEntries);
+        if (requestBuckets.size() < max) return true;
+        long cutoff = nowMillis - Math.max(1, windowSeconds) * 1000L;
+        requestBuckets.entrySet().removeIf(entry -> {
+            Long newest = entry.getValue().peekLast();
+            return newest == null || newest < cutoff;
+        });
+        return requestBuckets.size() < max;
+    }
+
+    private synchronized boolean reserveRecentEntry(String ip, long nowMillis) {
+        if (recentRequestsByIp.containsKey(ip)) return true;
+        int max = Math.max(100, config.maxRuntimeStateEntries);
+        if (recentRequestsByIp.size() < max) return true;
+        long cutoff = nowMillis - Math.max(1, config.aiRecentWindowSeconds) * 1000L;
+        recentRequestsByIp.entrySet().removeIf(entry -> {
+            RecentRequest newest = entry.getValue().peekLast();
+            return newest == null || newest.timestampMillis() < cutoff;
+        });
+        return recentRequestsByIp.size() < max;
     }
 
     private int recentCount(String ip, long nowMillis, int windowSeconds) {

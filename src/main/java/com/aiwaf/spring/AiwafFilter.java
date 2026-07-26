@@ -6,6 +6,7 @@ import com.aiwaf.core.AiwafDecision;
 import com.aiwaf.core.AiwafEngine;
 import com.aiwaf.core.LegitimateRouteKeywordsCore;
 import com.aiwaf.core.ServletRequestMapper;
+import com.aiwaf.core.BufferedServletRequest;
 import com.aiwaf.spring.support.AiwafRouteDecisions;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -59,14 +60,21 @@ public final class AiwafFilter extends OncePerRequestFilter {
         }
         long start = System.currentTimeMillis();
         Set<String> disabledMiddlewares = resolveDisabledMiddlewares(request);
-        AiwafRequest aiwafReq = ServletRequestMapper.from(request, disabledMiddlewares);
+        BufferedServletRequest.Result buffered = BufferedServletRequest.prepare(request, engine.config());
+        if (buffered.tooLarge()) {
+            response.sendError(413, "Request body too large");
+            return;
+        }
+        HttpServletRequest inspectedRequest = buffered.request();
+        AiwafRequest aiwafReq = ServletRequestMapper.from(
+                inspectedRequest, disabledMiddlewares, engine.config(), buffered.preview());
         AiwafDecision decision = engine.evaluate(aiwafReq);
         if (!decision.allowed()) {
             response.sendError(decision.statusCode(), decision.reason());
             AiwafLoggingCore.log(engine.config(), aiwafReq, decision, decision.statusCode(), System.currentTimeMillis() - start, 0);
             return;
         }
-        filterChain.doFilter(request, response);
+        filterChain.doFilter(inspectedRequest, response);
         AiwafLoggingCore.log(engine.config(), aiwafReq, decision, response.getStatus(), System.currentTimeMillis() - start, 0);
     }
 

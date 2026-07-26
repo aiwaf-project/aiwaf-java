@@ -259,7 +259,7 @@ class JavaFrameworkAiwafEndToEndTest {
     }
 
     @Test
-    void spring_forwarded_ip_uses_first_non_unknown_from_chain() throws Exception {
+    void spring_forwarded_ip_uses_rightmost_untrusted_hop() throws Exception {
         AiwafConfig config = new AiwafConfig();
         config.rateLimitEnabled = true;
         config.rateLimitMax = 1;
@@ -269,7 +269,7 @@ class JavaFrameworkAiwafEndToEndTest {
 
         String chain = "unknown, 198.51.100.41, 203.0.113.41";
         mvc.perform(get("/path-a").header("X-Forwarded-For", chain)).andExpect(status().isOk());
-        mvc.perform(get("/path-a").header("X-Forwarded-For", "198.51.100.41")).andExpect(status().isTooManyRequests());
+        mvc.perform(get("/path-a").header("X-Forwarded-For", "203.0.113.41")).andExpect(status().isTooManyRequests());
     }
 
     @Test

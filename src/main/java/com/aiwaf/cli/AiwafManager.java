@@ -2,10 +2,10 @@ package com.aiwaf.cli;
 
 import com.aiwaf.runtime.BlacklistManager;
 import com.aiwaf.runtime.RuntimeStorage;
+import com.aiwaf.core.SafeObjectInputStreams;
+import com.aiwaf.core.SecureFiles;
 
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.HashMap;
 import java.util.List;
@@ -170,8 +170,12 @@ public final class AiwafManager {
         payload.put("keywords", listKeywords(1000));
         payload.put("geo_blocked_countries", listGeoBlockedCountries());
         payload.put("path_exemptions", listPathExemptions());
-        try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(path))) {
-            out.writeObject(payload);
+        try {
+            SecureFiles.writeAtomically(java.nio.file.Path.of(path), output -> {
+                try (ObjectOutputStream out = new ObjectOutputStream(output)) {
+                    out.writeObject(payload);
+                }
+            });
             return true;
         } catch (Exception ex) {
             return false;
@@ -180,25 +184,25 @@ public final class AiwafManager {
 
     public boolean importConfig(String path) {
         if (path == null || path.isBlank()) return false;
-        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(path))) {
+        if (!SecureFiles.verifySignature(java.nio.file.Path.of(path))) return false;
+        try (var in = SafeObjectInputStreams.open(
+                new FileInputStream(path), SafeObjectInputStreams.Profile.CONFIG)) {
             Object obj = in.readObject();
             if (!(obj instanceof Map<?, ?> map)) {
                 return false;
             }
 
-            resetAll();
-
-            Object whitelist = map.get("whitelist_ips");
-            if (whitelist instanceof Iterable<?> values) {
-                for (Object value : values) {
-                    if (value != null) addWhitelistIp(String.valueOf(value), "import");
-                }
-            }
+            List<String> whitelistValues = validatedStrings(map.get("whitelist_ips"));
+            List<String> keywordValues = validatedStrings(map.get("keywords"));
+            List<String> geoValues = validatedStrings(map.get("geo_blocked_countries"));
+            List<String> pathValues = validatedStrings(map.get("path_exemptions"));
+            Map<String, ImportBlock> blockValues = new HashMap<>();
 
             Object blacklist = map.get("blacklist");
             if (blacklist instanceof Map<?, ?> values) {
+                if (values.size() > 100_000) return false;
                 for (Map.Entry<?, ?> entry : values.entrySet()) {
-                    String ip = String.valueOf(entry.getKey());
+                    String ip = boundedString(entry.getKey());
                     String reason = "import";
                     Map<String, Object> ext = null;
                     if (entry.getValue() instanceof Map<?, ?> info) {
@@ -214,35 +218,43 @@ public final class AiwafManager {
                             }
                         }
                     }
-                    addToBlacklist(ip, reason, ext);
+                    blockValues.put(ip, new ImportBlock(reason, ext));
                 }
+            } else if (blacklist != null) {
+                return false;
             }
 
-            Object keywords = map.get("keywords");
-            if (keywords instanceof Iterable<?> values) {
-                for (Object value : values) {
-                    if (value != null) addKeyword(String.valueOf(value));
-                }
-            }
-
-            Object geo = map.get("geo_blocked_countries");
-            if (geo instanceof Iterable<?> values) {
-                for (Object value : values) {
-                    if (value != null) addGeoBlockedCountry(String.valueOf(value));
-                }
-            }
-
-            Object paths = map.get("path_exemptions");
-            if (paths instanceof Iterable<?> values) {
-                for (Object value : values) {
-                    if (value != null) addPathExemption(String.valueOf(value), "import");
-                }
-            }
+            if (!resetAll()) return false;
+            for (String value : whitelistValues) addWhitelistIp(value, "import");
+            for (Map.Entry<String, ImportBlock> entry : blockValues.entrySet())
+                addToBlacklist(entry.getKey(), entry.getValue().reason(), entry.getValue().extended());
+            for (String value : keywordValues) addKeyword(value);
+            for (String value : geoValues) addGeoBlockedCountry(value);
+            for (String value : pathValues) addPathExemption(value, "import");
             return true;
         } catch (Exception ex) {
             return false;
         }
     }
+
+    private static List<String> validatedStrings(Object raw) {
+        if (raw == null) return List.of();
+        if (!(raw instanceof Iterable<?> values)) throw new IllegalArgumentException("expected list");
+        List<String> out = new java.util.ArrayList<>();
+        for (Object value : values) {
+            if (out.size() >= 100_000) throw new IllegalArgumentException("too many entries");
+            if (value != null) out.add(boundedString(value));
+        }
+        return out;
+    }
+
+    private static String boundedString(Object value) {
+        String text = String.valueOf(value);
+        if (text.length() > 4096) throw new IllegalArgumentException("entry too long");
+        return text;
+    }
+
+    private record ImportBlock(String reason, Map<String, Object> extended) {}
 
     public boolean resetAll() {
         return reset(false, false);

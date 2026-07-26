@@ -22,6 +22,7 @@ public final class AiwafLoggingCore {
         if (!logDir.exists()) {
             logDir.mkdirs();
         }
+        SecureFiles.restrictDirectory(logDir.toPath());
 
         File accessLog = new File(logDir, "access.log");
         File errorLog = new File(logDir, "error.log");
@@ -31,13 +32,13 @@ public final class AiwafLoggingCore {
         String nowCombined = ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd/MMM/yyyy:HH:mm:ss Z", Locale.ENGLISH));
         String nowSimple = ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
-        String ip = req.ip();
-        String method = req.method();
-        String path = req.path();
-        String referer = req.headers().getOrDefault("referer", "-");
-        String userAgent = req.headers().getOrDefault("user-agent", "-");
+        String ip = oneLine(req.ip(), 128);
+        String method = oneLine(req.method(), 32);
+        String path = oneLine(req.path(), 4096);
+        String referer = oneLine(req.headers().getOrDefault("referer", "-"), 4096);
+        String userAgent = oneLine(req.headers().getOrDefault("user-agent", "-"), config.maxUserAgentLength);
         boolean isBlocked = decision != null && !decision.allowed();
-        String blockReason = isBlocked ? decision.reason() : "-";
+        String blockReason = isBlocked ? oneLine(decision.reason(), 1024) : "-";
         
         // Access Log
         try (FileWriter fw = new FileWriter(accessLog, true)) {
@@ -46,8 +47,12 @@ public final class AiwafLoggingCore {
                     fw.write("timestamp,ip,method,path,query_string,protocol,status_code,content_length,response_time_ms,referer,user_agent,blocked,block_reason\n");
                 }
                 String qs = "-";
-                if (req.query() != null && !req.query().isEmpty()) {
-                    qs = req.query().toString().replace(",", ";");
+                if (config.logQueryParameters && req.query() != null && !req.query().isEmpty()) {
+                    java.util.Map<String, String> safe = new java.util.HashMap<>();
+                    req.query().forEach((k, v) -> safe.put(k,
+                            config.sensitiveParameterNames.stream().anyMatch(n -> n.equalsIgnoreCase(k))
+                                    ? "[redacted]" : oneLine(v, 1024)));
+                    qs = safe.toString().replace(",", ";");
                 }
                 fw.write(String.format("%s,%s,%s,%s,%s,HTTP/1.1,%d,%d,%d,%s,%s,%s,%s\n",
                         nowIso, escapeCsv(ip), escapeCsv(method), escapeCsv(path), escapeCsv(qs),
@@ -68,6 +73,7 @@ public final class AiwafLoggingCore {
         } catch (IOException e) {
             logger.log(Level.WARNING, "Failed to write access log", e);
         }
+        SecureFiles.restrictFile(accessLog.toPath());
 
         // Error log
         if (statusCode >= 400) {
@@ -86,14 +92,23 @@ public final class AiwafLoggingCore {
                 logger.log(Level.WARNING, "Failed to write aiwaf log", e);
             }
         }
+        if (errorLog.exists()) SecureFiles.restrictFile(errorLog.toPath());
+        if (aiwafLog.exists()) SecureFiles.restrictFile(aiwafLog.toPath());
     }
 
     private static String escapeCsv(String val) {
         if (val == null) return "";
+        if (!val.isEmpty() && "=+-@".indexOf(val.charAt(0)) >= 0) val = "'" + val;
         if (val.contains(",") || val.contains("\"") || val.contains("\n")) {
             return "\"" + val.replace("\"", "\"\"") + "\"";
         }
         return val;
+    }
+
+    private static String oneLine(String value, int maxLength) {
+        if (value == null) return "";
+        String cleaned = value.replaceAll("[\\p{Cntrl}&&[^\\t]]", " ").replace('\t', ' ');
+        return cleaned.length() <= maxLength ? cleaned : cleaned.substring(0, maxLength);
     }
 
     private static String jsonEscape(String s) {

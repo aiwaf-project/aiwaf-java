@@ -60,7 +60,7 @@ public final class TrainingCore {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("model_backend", "aiwaf_java");
         metadata.put("created_at_epoch_ms", System.currentTimeMillis());
-        metadata.put("aiwaf_java_version", "1.0.1");
+        metadata.put("aiwaf_java_version", "1.1.0");
         metadata.put("java_runtime_version", System.getProperty("java.runtime.version", "unknown"));
         metadata.put("model_schema", "iforest-v1");
         payload.put("avg_response_time_ms", avgResponse);

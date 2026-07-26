@@ -17,6 +17,40 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 class AiwafEngineParityTest {
 
     @Test
+    void rejects_java_serialization_content_type_before_route_exemptions() {
+        AiwafConfig config = new AiwafConfig();
+        AiwafEngine engine = new AiwafEngine(config);
+        AiwafDecision decision = engine.evaluate(req(
+                "POST",
+                "/health",
+                "198.51.100.200",
+                Map.of("Content-Type", "application/x-java-serialized-object; charset=binary"),
+                Map.of(),
+                "US"
+        ));
+
+        assertFalse(decision.allowed());
+        assertEquals(415, decision.statusCode());
+    }
+
+    @Test
+    void rejects_base64_java_serialization_in_query() {
+        AiwafConfig config = new AiwafConfig();
+        AiwafEngine engine = new AiwafEngine(config);
+        AiwafDecision decision = engine.evaluate(req(
+                "GET",
+                "/decode",
+                "198.51.100.201",
+                browserHeaders(),
+                Map.of("value", "rO0ABXNyABFqYXZhLmxhbmcuU3RyaW5n"),
+                "US"
+        ));
+
+        assertFalse(decision.allowed());
+        assertEquals(415, decision.statusCode());
+    }
+
+    @Test
     void global_disabled_middlewares_use_python_style_names() {
         AiwafConfig config = new AiwafConfig();
         config.privateIpsExempted = false;

@@ -26,7 +26,7 @@ public final class AiwafInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        AiwafRequest mapped = ServletRequestMapper.from(request);
+        AiwafRequest mapped = ServletRequestMapper.from(request, java.util.Set.of(), engine.config());
         Set<String> disabled = new HashSet<>();
         for (String middleware : MIDDLEWARES) {
             if (!AiwafRouteDecisions.shouldApply(request.getRequestURI(), handler, middleware, engine.config().pathRules)) {
